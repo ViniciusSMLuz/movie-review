@@ -1,0 +1,27 @@
+{
+  "name": "espm-nosql-movie-reviews",
+  "version": "1.0.0",
+  "description": "",
+  "main": "server.js",
+  "scripts": {
+    "start": "node ."
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ryguigas0/espm-nosql-movie-reviews.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/ryguigas0/espm-nosql-movie-reviews/issues"
+  },
+  "homepage": "https://github.com/ryguigas0/espm-nosql-movie-reviews#readme",
+  "dependencies": {
+    "body-parser": "^2.2.0",
+    "cassandra-driver": "^4.8.0",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0"
+  }
+}
