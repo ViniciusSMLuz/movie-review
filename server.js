@@ -3,15 +3,15 @@ import bodyParser from 'body-parser';
 import cassandra from 'cassandra-driver';
 import path from 'path';
 
-const CASSANDRA_HOST = process.env.CASSANDRA_HOST || '127.0.0.1'; // '127.0.0.1' como fallback
-const CASSANDRA_DATACENTER = process.env.CASSANDRA_DATACENTER || 'datacenter1';
-const KEYSPACE = 'movie_reviews';
+const DB_HOST = process.env.CASSANDRA_HOST || '127.0.0.1'; // '127.0.0.1' como fallback
+const DB_DATACENTER = process.env.CASSANDRA_DATACENTER || 'datacenter1';
+const DATABASE_KEYSPACE = 'cinema_ratings';
 
-const Uuid = cassandra.types.Uuid;
+const UUIDGenerator = cassandra.types.Uuid;
 
-const client = new cassandra.Client({
-    contactPoints: [CASSANDRA_HOST],
-    localDataCenter: CASSANDRA_DATACENTER,
+const dbClient = new cassandra.Client({
+    contactPoints: [DB_HOST],
+    localDataCenter: DB_DATACENTER,
     // policies: {
     //     retry: new cassandra.policies.retry.RetryPolicy()
     // },
@@ -20,146 +20,146 @@ const client = new cassandra.Client({
 
 // --- "Migration" Programática: Criar Keyspace e Tabelas ---
 
-async function initDb() {
+async function initializeDatabase() {
     try {
         console.log("Conectando ao Cassandra...");
-        await client.connect();
-        console.log(`Conectado a ${client.hosts.length} hosts do cluster.`);
+        await dbClient.connect();
+        console.log(`Conectado a ${dbClient.hosts.length} hosts do cluster.`);
 
         console.log("Criando Keyspace (se não existir)...");
-        await client.execute(`
-            CREATE KEYSPACE IF NOT EXISTS ${KEYSPACE}
+        await dbClient.execute(`
+            CREATE KEYSPACE IF NOT EXISTS ${DATABASE_KEYSPACE}
             WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}
         `);
 
-        // Informa ao client para usar este keyspace em todas as queries futuras
-        client.keyspace = KEYSPACE;
+        // Informa ao dbClient para usar este keyspace em todas as queries futuras
+        dbClient.keyspace = DATABASE_KEYSPACE;
 
-        console.log("Criando tabela 'filmes' (se não existir)...");
-        await client.execute(`
-            CREATE TABLE IF NOT EXISTS filmes (
+        console.log("Criando tabela 'movies' (se não existir)...");
+        await dbClient.execute(`
+            CREATE TABLE IF NOT EXISTS movies (
                 id uuid PRIMARY KEY,
-                nome text
+                title text
             )
         `);
 
-        console.log("Criando tabela 'avaliacoes_por_filme' (se não existir)...");
-        await client.execute(`
-            CREATE TABLE IF NOT EXISTS avaliacoes_por_filme (
-                id_filme uuid,
-                data timestamp,
-                id_avaliacao uuid,
-                usuario text,
-                nota int,
-                PRIMARY KEY (id_filme, data, id_avaliacao)
-            ) WITH CLUSTERING ORDER BY (data DESC)
+        console.log("Criando tabela 'reviews_by_movie' (se não existir)...");
+        await dbClient.execute(`
+            CREATE TABLE IF NOT EXISTS reviews_by_movie (
+                movie_id uuid,
+                timestamp timestamp,
+                review_id uuid,
+                reviewer text,
+                rating int,
+                PRIMARY KEY (movie_id, timestamp, review_id)
+            ) WITH CLUSTERING ORDER BY (timestamp DESC)
         `);
 
         console.log("Banco de dados pronto!");
 
-    } catch (err) {
-        console.error("ERRO AO INICIALIZAR O BANCO:", err);
+    } catch (error) {
+        console.error("ERRO AO INICIALIZAR O BANCO:", error);
         process.exit(1); // Encerra a aplicação se não conseguir conectar/criar tabelas
     }
 }
 
 // --- Endpoints da API ---
-const app = express();
+const server = express();
 
-app.use(bodyParser.json());
+server.use(bodyParser.json());
 
-app.use(express.static(path.join(import.meta.dirname, '/public')));
+server.use(express.static(path.join(import.meta.dirname, '/public')));
 
 // 1. Carregar a lista de filmes
-app.get('/api/filmes', async (req, res) => {
+server.get('/api/movies', async (req, res) => {
     try {
-        const query = 'SELECT id, nome FROM filmes';
-        const result = await client.execute(query);
-        res.json(result.rows);
-    } catch (err) {
-        console.error("Erro ao buscar filmes:", err);
+        const sqlQuery = 'SELECT id, title FROM movies';
+        const queryResult = await dbClient.execute(sqlQuery);
+        res.json(queryResult.rows);
+    } catch (error) {
+        console.error("Erro ao buscar filmes:", error);
         res.status(500).json({ error: 'Erro ao buscar filmes' });
     }
 });
 
 // 2. Cadastrar um novo filme
-app.post('/api/filmes', async (req, res) => {
+server.post('/api/movies', async (req, res) => {
     try {
-        const { nome } = req.body;
-        if (!nome) {
-            return res.status(400).json({ error: 'O campo "nome" é obrigatório' });
+        const { title } = req.body;
+        if (!title) {
+            return res.status(400).json({ error: 'O campo "title" é obrigatório' });
         }
         
-        const id = Uuid.random(); // Gera um UUID v4
-        const query = 'INSERT INTO filmes (id, nome) VALUES (?, ?)';
+        const movieId = UUIDGenerator.random(); // Gera um UUID v4
+        const sqlQuery = 'INSERT INTO movies (id, title) VALUES (?, ?)';
         
-        await client.execute(query, [id, nome], { prepare: true });
+        await dbClient.execute(sqlQuery, [movieId, title], { prepare: true });
         
         // Retorna o filme criado com o ID gerado
-        res.status(201).json({ id, nome });
+        res.status(201).json({ id: movieId, title });
 
-    } catch (err) {
-        console.error("Erro ao adicionar filme:", err);
+    } catch (error) {
+        console.error("Erro ao adicionar filme:", error);
         res.status(500).json({ error: 'Erro ao adicionar filme' });
     }
 });
 
 // 3. Exibir a lista de avaliações de um filme
-app.get('/api/filmes/:id_filme/avaliacoes', async (req, res) => {
+server.get('/api/movies/:movie_id/reviews', async (req, res) => {
     try {
-        const { id_filme } = req.params;
-        const query = 'SELECT id_filme, usuario, nota, data FROM avaliacoes_por_filme WHERE id_filme = ?';
+        const { movie_id } = req.params;
+        const sqlQuery = 'SELECT movie_id, reviewer, rating, timestamp FROM reviews_by_movie WHERE movie_id = ?';
         
-        const result = await client.execute(query, [id_filme], { prepare: true });
+        const queryResult = await dbClient.execute(sqlQuery, [movie_id], { prepare: true });
         
-        res.json(result.rows);
+        res.json(queryResult.rows);
 
-    } catch (err) {
-        console.error("Erro ao buscar avaliações:", err);
+    } catch (error) {
+        console.error("Erro ao buscar avaliações:", error);
         res.status(500).json({ error: 'Erro ao buscar avaliações' });
     }
 });
 
 // 4. Avaliar (armazenar avaliação) um filme
-app.post('/api/filmes/:id_filme/avaliacoes', async (req, res) => {
+server.post('/api/movies/:movie_id/reviews', async (req, res) => {
     try {
-        const { id_filme } = req.params;
-        const { usuario, nota } = req.body;
+        const { movie_id } = req.params;
+        const { reviewer, rating } = req.body;
 
-        if (!usuario || nota === undefined) {
-            return res.status(400).json({ error: 'Campos "usuario" e "nota" são obrigatórios' });
+        if (!reviewer || rating === undefined) {
+            return res.status(400).json({ error: 'Campos "reviewer" e "rating" são obrigatórios' });
         }
 
-        const data = new Date(); // Data atual
-        const id_avaliacao = Uuid.random(); // ID único para a avaliação
-        const notaInt = parseInt(nota, 10);
+        const timestamp = new Date(); // Data atual
+        const reviewId = UUIDGenerator.random(); // ID único para a avaliação
+        const ratingValue = parseInt(rating, 10);
 
-        const query = 'INSERT INTO avaliacoes_por_filme (id_filme, data, id_avaliacao, usuario, nota) VALUES (?, ?, ?, ?, ?)';
+        const sqlQuery = 'INSERT INTO reviews_by_movie (movie_id, timestamp, review_id, reviewer, rating) VALUES (?, ?, ?, ?, ?)';
         
-        await client.execute(query, [id_filme, data, id_avaliacao, usuario, notaInt], { prepare: true });
+        await dbClient.execute(sqlQuery, [movie_id, timestamp, reviewId, reviewer, ratingValue], { prepare: true });
 
         res.status(201).json({ 
-            id_filme, 
-            data, 
-            id_avaliacao, 
-            usuario, 
-            nota: notaInt 
+            movie_id, 
+            timestamp, 
+            review_id: reviewId, 
+            reviewer, 
+            rating: ratingValue 
         });
 
-    } catch (err) {
-        console.error("Erro ao enviar avaliação:", err);
+    } catch (error) {
+        console.error("Erro ao enviar avaliação:", error);
         res.status(500).json({ error: 'Erro ao enviar avaliação' });
     }
 });
 
-const port = process.env.PORT || 3000;
+const serverPort = process.env.PORT || 3000;
 
 // --- Iniciar o Servidor ---
 // Primeiro inicializa o DB, depois inicia o servidor Express
-initDb().then(() => {
-    app.listen(port, () => {
-        console.log(`Servidor rodando em http://localhost:${port}`);
+initializeDatabase().then(() => {
+    server.listen(serverPort, () => {
+        console.log(`Servidor rodando em http://localhost:${serverPort}`);
     });
-}).catch(err => {
-    console.error("Falha ao iniciar o servidor:", err);
+}).catch(error => {
+    console.error("Falha ao iniciar o servidor:", error);
 });
